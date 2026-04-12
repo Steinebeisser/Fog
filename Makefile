@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -ggdb -g -O3
+CFLAGS = -Wall -Wextra -ggdb -g -O0
 INCLUDES = -Isrc -I.
 
 

@@ -45,18 +45,34 @@
  *   program --help=advanced              # help value is "advanced"
  */
 
-#ifndef PGS_ARGS_H
-#define PGS_ARGS_H
+/*
+
+
+*/
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
+#ifndef PGS_ARGS_FUNC_PREFIX
+#   define PGS_ARGS_FUNC_PREFIX pgs_args
+#endif
+
+#define PGS__PASTE_(a,b) a##b
+#define PGS__PASTE(a,b)  PGS__PASTE_(a,b)
+#define PGS__FN(name)    PGS__PASTE(PGS_ARGS_FUNC_PREFIX, name)
+#define PGS__ARGS_T      PGS__PASTE(PGS_ARGS_FUNC_PREFIX, _t)
+#define PGS__ID          PGS__PASTE(PGS_ARGS_FUNC_PREFIX, _arg_id)
+#define PGS__META        PGS__PASTE(PGS_ARGS_FUNC_PREFIX, _arg_meta)
+#define PGS__COUNT       PGS__PASTE(PGS_ARGS_FUNC_PREFIX, _ARG_COUNT)
+
 typedef enum {
     PGS_ARG_FLAG,
     PGS_ARG_VALUE,
-    PGS_ARG_OPTIONAL
+    PGS_ARG_OPTIONAL,
+    PGS_ARG_SUBCOMMAND
 } PgsArgType;
 
 typedef struct {
@@ -68,15 +84,15 @@ PGS_ARGS
 
     const char **positionals;
     int positional_count;
-} PgsArgs;
+} PGS__ARGS_T;
 
 typedef enum {
 #define PGS_ARG(arg_type, name, short_flag, long_flag, description, valid_values) \
-    PGS_ARG_##name,
+    PGS__PASTE(PGS__ID, _##name),
 PGS_ARGS
 #undef PGS_ARG
-    PGS_ARG_COUNT
-} PgsArgId;
+    PGS__COUNT
+} PGS__ID;
 
 typedef struct {
     const char *name;
@@ -87,53 +103,84 @@ typedef struct {
     PgsArgType type;
 } PgsArgMeta;
 
-static const PgsArgMeta pgs_arg_meta[PGS_ARG_COUNT] = {
+static const PgsArgMeta PGS__META[] = {
 #define PGS_ARG(arg_type, name, short_flag, long_flag, description, valid_values) \
-    [PGS_ARG_##name] = { #name, short_flag, long_flag, description, valid_values, arg_type },
-    PGS_ARGS
+    { #name, short_flag, long_flag, description, valid_values, arg_type },
+PGS_ARGS
 #undef PGS_ARG
 };
 
-bool pgs_args_parse(PgsArgs *args, int argc, char** argv);
-void pgs_args_print_help(void);
-void pgs_args_print_help_specific_id(PgsArgId arg_id);
-void pgs_args_print_help_specific_name(const char *name);
+bool PGS__FN(_parse)(PGS__ARGS_T *args, int argc, char** argv, bool ignore_on_error);
+void PGS__FN(_print_help)(void);
+void PGS__FN(_print_help_specific_id)(PGS__ID arg_id);
+void PGS__FN(_print_help_specific_name)(const char *name);
 
-#endif // PGS_ARGS_H
+static uint64_t __attribute__((unused)) pgs_args_parse_size(const char *str);
 
 #ifdef PGS_ARGS_IMPLEMENTATION
 
-static PgsArgId pgs_args_find_by_short(char flag) {
-    for (int i = 0; i < PGS_ARG_COUNT; ++i) {
-        if (pgs_arg_meta[i].short_flag == flag) {
+#define KIB (1024.0)
+#define MIB (KIB * 1024.0)
+#define GIB (MIB * 1024.0)
+#define TIB (GIB * 1024.0)
+
+#define KB  (1000.0)
+#define MB  (KB * 1000.0)
+#define GB  (MB * 1000.0)
+#define TB  (GB * 1000.0)
+
+static uint64_t pgs_args_parse_size(const char *str) {
+    if (!str) return 0;
+
+    char *end;
+    double val = strtod(str, &end);
+    if (end == str) return 0;
+
+    while (*end == ' ') end++;
+
+    if      (!strcasecmp(end, "kib")) val *= KIB;
+    else if (!strcasecmp(end, "mib")) val *= MIB;
+    else if (!strcasecmp(end, "gib")) val *= GIB;
+    else if (!strcasecmp(end, "tib")) val *= TIB;
+    else if (!strcasecmp(end, "kb") || !strcasecmp(end, "k")) val *= KB;
+    else if (!strcasecmp(end, "mb") || !strcasecmp(end, "m")) val *= MB;
+    else if (!strcasecmp(end, "gb") || !strcasecmp(end, "g")) val *= GB;
+    else if (!strcasecmp(end, "tb") || !strcasecmp(end, "t")) val *= TB;
+
+    return (uint64_t)val;
+}
+
+static PGS__ID PGS__FN(_find_by_short)(char flag) {
+    for (int i = 0; i < PGS__COUNT; ++i) {
+        if (PGS__META[i].short_flag == flag) {
             return i;
         }
     }
-    return PGS_ARG_COUNT;
+    return PGS__COUNT;
 }
 
-static PgsArgId pgs_args_find_by_long(const char *flag) {
-    for (int i = 0; i < PGS_ARG_COUNT; ++i) {
-        if (pgs_arg_meta[i].long_flag && strcmp(pgs_arg_meta[i].long_flag, flag) == 0) {
+static PGS__ID PGS__FN(_find_by_long)(const char *flag) {
+    for (int i = 0; i < PGS__COUNT; ++i) {
+        if (PGS__META[i].long_flag && strcmp(PGS__META[i].long_flag, flag) == 0) {
             return i;
         }
     }
-    return PGS_ARG_COUNT;
+    return PGS__COUNT;
 }
 
-static PgsArgId pgs_args_find_by_name(const char *name) {
-    for (int i = 0; i < PGS_ARG_COUNT; ++i) {
-        if (strcmp(pgs_arg_meta[i].name, name) == 0) {
+static PGS__ID PGS__FN(_find_by_name)(const char *name) {
+    for (int i = 0; i < PGS__COUNT; ++i) {
+        if (strcmp(PGS__META[i].name, name) == 0) {
             return i;
         }
     }
-    return PGS_ARG_COUNT;
+    return PGS__COUNT;
 }
 
-bool pgs_args_validate_value(PgsArgId arg_id, const char *value) {
-    if (arg_id >= PGS_ARG_COUNT) return false;
+bool PGS__FN(_validate_value)(PGS__ID arg_id, const char *value) {
+    if (arg_id >= PGS__COUNT) return false;
 
-    const char *valid_values = pgs_arg_meta[arg_id].valid_values;
+    const char *valid_values = PGS__META[arg_id].valid_values;
     if (!valid_values || !value) return true;
 
     char *valid_copy = strdup(valid_values);
@@ -151,10 +198,10 @@ bool pgs_args_validate_value(PgsArgId arg_id, const char *value) {
     return false;
 }
 
-static void pgs_args_set_value(PgsArgs *args, PgsArgId arg_id, const char *value) {
+static void PGS__FN(_set_value)(PGS__ARGS_T *args, PGS__ID arg_id, const char *value) {
     switch (arg_id) {
 #define PGS_ARG(arg_type, name, short_flag, long_flag, description, valid_values) \
-        case PGS_ARG_##name: \
+        case PGS__PASTE(PGS__ID, _##name): \
             args->name##_present = true; \
             args->name##_value = value; \
             break;
@@ -164,10 +211,10 @@ static void pgs_args_set_value(PgsArgs *args, PgsArgId arg_id, const char *value
     }
 }
 
-bool pgs_args_parse(PgsArgs *args, int argc, char** argv) {
+bool PGS__FN(_parse)(PGS__ARGS_T *args, int argc, char** argv, bool ignore_on_error) {
     if (!args || !argv || argc < 0) return false;
 
-    memset(args, 0, sizeof(PgsArgs));
+    memset(args, 0, sizeof(PGS__ARGS_T));
     args->positionals = NULL;
 
     for (int i = 1; i < argc; ++i) {
@@ -195,45 +242,53 @@ bool pgs_args_parse(PgsArgs *args, int argc, char** argv) {
                 flag_name = flag_name_only;
             }
 
-            PgsArgId arg_id = pgs_args_find_by_long(flag_name);
+            PGS__ID arg_id = PGS__FN(_find_by_long)(flag_name);
 
-            if (arg_id == PGS_ARG_COUNT) {
+            if (arg_id == PGS__COUNT) {
+                if (ignore_on_error)
+                    continue;
                 fprintf(stderr, "Error: Unknown argument '--%s'\n", flag_name);
                 return false;
             }
 
-            const PgsArgMeta *meta = &pgs_arg_meta[arg_id];
+            const PgsArgMeta *meta = &PGS__META[arg_id];
 
             if (meta->type == PGS_ARG_FLAG) {
-                pgs_args_set_value(args, arg_id, "1");
+                PGS__FN(_set_value)(args, arg_id, "1");
             } else if (meta->type == PGS_ARG_VALUE) {
                 if (i + 1 >= argc) {
+                    if (ignore_on_error)
+                        continue;
                     fprintf(stderr, "Error: Argument '--%s' requires a value\n", flag_name);
                     return false;
                 }
                 const char *value = argv[++i];
-                if (!pgs_args_validate_value(arg_id, value)) {
+                if (!PGS__FN(_validate_value)(arg_id, value)) {
+                    if (ignore_on_error)
+                        continue;
                     fprintf(stderr, "Error: Invalid value '%s' for '--%s'. Valid values: %s\n",
                             value, flag_name, meta->valid_values);
                     return false;
                 }
-                pgs_args_set_value(args, arg_id, value);
+                PGS__FN(_set_value)(args, arg_id, value);
             } else if (meta->type == PGS_ARG_OPTIONAL) {
                 const char *value = sep_pos ? (sep_pos + 1) : NULL;
-                pgs_args_set_value(args, arg_id, value);
+                PGS__FN(_set_value)(args, arg_id, value);
             }
         }
         else if (arg[0] == '-' && arg[1] != '\0') {
             for (const char *f = arg + 1; *f; ++f) {
-                PgsArgId arg_id = pgs_args_find_by_short(*f);
-                if (arg_id == PGS_ARG_COUNT) {
+                PGS__ID arg_id = PGS__FN(_find_by_short)(*f);
+                if (arg_id == PGS__COUNT) {
+                    if (ignore_on_error)
+                        continue;
                     fprintf(stderr, "Error: Unknown argument '-%c'\n", *f);
                     return false;
                 }
-                const PgsArgMeta *meta = &pgs_arg_meta[arg_id];
+                const PgsArgMeta *meta = &PGS__META[arg_id];
 
                 if (meta->type == PGS_ARG_FLAG) {
-                    pgs_args_set_value(args, arg_id, "1");
+                    PGS__FN(_set_value)(args, arg_id, "1");
                 } else if (meta->type == PGS_ARG_OPTIONAL) {
                     const char *value = NULL;
                     if (f[1] == '=' || f[1] == ':') {
@@ -241,52 +296,72 @@ bool pgs_args_parse(PgsArgs *args, int argc, char** argv) {
                     } else if (f[1] != '\0') {
                         value = f + 1;
                     }
-                    pgs_args_set_value(args, arg_id, value);
+                    PGS__FN(_set_value)(args, arg_id, value);
                     break;
                 } else {
                     const char *value = (f[1] != '\0') ? (f + 1) : NULL;
                     if (!value) {
                         if (i + 1 >= argc) {
+                            if (ignore_on_error)
+                                continue;
                             fprintf(stderr, "Error: Argument '-%c' requires a value\n", *f);
                             return false;
                         }
                         value = argv[++i];
                     }
-                    if (value && !pgs_args_validate_value(arg_id, value)) {
+                    if (value && !PGS__FN(_validate_value)(arg_id, value)) {
+                        if (ignore_on_error)
+                            continue;
                         fprintf(stderr, "Error: Invalid value '%s' for '-%c'\n", value, *f);
                         return false;
                     }
-                    pgs_args_set_value(args, arg_id, value);
+                    PGS__FN(_set_value)(args, arg_id, value);
                     break;
                 }
             }
         }
         else {
-            args->positionals = realloc(args->positionals, sizeof(char*) * (args->positional_count + 1));
-            if (!args->positionals) {
-                fprintf(stderr, "Error: Out of memory\n");
-                return false;
+            PGS__ID arg_id = PGS__FN(_find_by_name)(arg);
+
+            if (arg_id != PGS__COUNT && PGS__META[arg_id].type == PGS_ARG_SUBCOMMAND) {
+                const char *value = argv[++i];
+
+                PGS__FN(_set_value)(args, arg_id, value);
+
+                return true;
+            } else {
+                args->positionals = realloc(args->positionals, sizeof(char*) * (args->positional_count + 1));
+                if (!args->positionals) {
+                    if (ignore_on_error)
+                        continue;
+                    fprintf(stderr, "Error: Out of memory\n");
+                    return false;
+                }
+                args->positionals[args->positional_count++] = arg;
             }
-            args->positionals[args->positional_count++] = arg;
         }
     }
 
     return true;
 }
 
-void pgs_args_print_help(void) {
+void PGS__FN(_print_help)(void) {
     printf("Available arguments:\n\n");
 
-    for (int i = 0; i < PGS_ARG_COUNT; ++i) {
-        const PgsArgMeta *meta = &pgs_arg_meta[i];
+    for (int i = 0; i < PGS__COUNT; ++i) {
+        const PgsArgMeta *meta = &PGS__META[i];
 
         printf("  ");
-        if (meta->short_flag) {
-            printf("-%c", meta->short_flag);
-            if (meta->long_flag) printf(", ");
-        }
-        if (meta->long_flag) {
-            printf("--%s", meta->long_flag);
+        if (meta->type == PGS_ARG_SUBCOMMAND) {
+            printf("%s", meta->name);
+        } else {
+            if (meta->short_flag) {
+                printf("-%c", meta->short_flag);
+                if (meta->long_flag) printf(", ");
+            }
+            if (meta->long_flag) {
+                printf("--%s", meta->long_flag);
+            }
         }
 
         printf("\n      %s\n", meta->description);
@@ -299,25 +374,25 @@ void pgs_args_print_help(void) {
     }
 }
 
-void pgs_args_print_help_specific_name(const char *name) {
-    PgsArgId arg_id = pgs_args_find_by_name(name);
-    if (arg_id == PGS_ARG_COUNT) {
+void PGS__FN(_print_help_specific_name)(const char *name) {
+    PGS__ID arg_id = PGS__FN(_find_by_name)(name);
+    if (arg_id == PGS__COUNT) {
         fprintf(stderr, "Failed to find argument for `%s`\n", name);
         return;
     }
 
-    pgs_args_print_help_specific_id(arg_id);
+    PGS__FN(_print_help_specific_id)(arg_id);
 }
 
-void pgs_args_print_help_specific_id(PgsArgId arg_id) {
+void PGS__FN(_print_help_specific_id)(PGS__ID arg_id) {
 
-    if (arg_id == PGS_ARG_COUNT) {
+    if (arg_id == PGS__COUNT) {
         fprintf(stderr, "Error: Unknown argument");
-        pgs_args_print_help();
+        PGS__FN(_print_help)();
         return;
     }
 
-    const PgsArgMeta *meta = &pgs_arg_meta[arg_id];
+    const PgsArgMeta *meta = &PGS__META[arg_id];
 
     printf("Help for '%s':\n\n", meta->name);
     printf("  ");
@@ -341,11 +416,23 @@ void pgs_args_print_help_specific_id(PgsArgId arg_id) {
         case PGS_ARG_FLAG: type_str = "flag (no value needed)"; break;
         case PGS_ARG_VALUE: type_str = "requires value"; break;
         case PGS_ARG_OPTIONAL: type_str = "optional value"; break;
+        case PGS_ARG_SUBCOMMAND: type_str = "subcommand value"; break;
     }
     printf("  Type: %s\n", type_str);
 }
 
 #endif // PGS_ARGS_IMPLEMENTATION
+
+#undef PGS_ARGS_FUNC_PREFIX
+#undef PGS__PASTE_
+#undef PGS__PASTE
+#undef PGS__FN
+#undef PGS__ARGS_T
+#undef PGS__ID
+#undef PGS__META
+#undef PGS__COUNT
+#undef PGS_ARGS
+#undef PGS_ARGS_IMPLEMENTATION
 
 #ifndef PGS_ARGS_STRIP_PREFIX_GUARD_
 #define PGS_ARGS_STRIP_PREFIX_GUARD_

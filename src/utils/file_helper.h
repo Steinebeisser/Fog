@@ -17,7 +17,7 @@ bool get_file_info_at(int dirfd, const char *name, struct STAT *st);
 
 bool is_directory(struct STAT info);
 bool is_file(struct STAT info);
-size_t get_filesize(struct STAT stat);
+size_t get_filesize(struct STAT stat, bool apparent);
 
 
 #endif // FOG_FILE_HELPER_H

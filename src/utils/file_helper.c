@@ -37,6 +37,8 @@ bool is_file(struct STAT stat) {
     return true;
 }
 
-size_t get_filesize(struct STAT stat) {
-    return stat.st_size;
+size_t get_filesize(struct STAT stat, bool apparent) {
+    if (apparent)
+        return stat.st_size;
+    return stat.st_blocks * 512ULL;
 }
