@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 #include "commands/dupes_cmd.h"
+#include "commands/hash_cmd.h"
 #include "commands/scan_cmd.h"
-#include "utils/blake2b.h"
 
 #define PGS_LOG_IMPLEMENTATION
 #ifndef PGS_LOG_ENABLED
@@ -14,6 +14,7 @@
 #define PGS_ARGS \
     PGS_ARG(PGS_ARG_SUBCOMMAND, scan, 0, NULL, "Scan a folder/file", NULL) \
     PGS_ARG(PGS_ARG_SUBCOMMAND, dupe, 0, NULL, "Scans a folder and returns duplicte files", NULL) \
+    PGS_ARG(PGS_ARG_SUBCOMMAND, hash, 0, NULL, "Hash fieles/input", NULL) \
     PGS_ARG(PGS_ARG_OPTIONAL, help, 'h', "help", "Show help message", NULL)
 #define PGS_ARGS_IMPLEMENTATION
 #include "third_party/pgs_args.h"
@@ -36,6 +37,8 @@ int main(int argc, char **argv) {
         return !cmd_scan(argc - 1, argv + 1);
     } else if (args.dupe_present) {
         return !cmd_dupe(argc - 1, argv + 1);
+    } else if (args.hash_present) {
+        return !cmd_hash(argc - 1, argv + 1);
     }
 
 

@@ -1,6 +1,6 @@
 #include "dupes_cmd.h"
 #include "scan/scanner.h"
-#include "utils/blake2b.h"
+#include "utils/hashes/blake2b.h"
 #include "utils/file_helper.h"
 #include <fnmatch.h>
 #include "utils/fog_timer.h"
@@ -25,6 +25,7 @@
     PGS_ARG(PGS_ARG_FLAG, include_mount, 'm', "include-mount", "Include Mount Files in the scan", NULL) \
     PGS_ARG(PGS_ARG_VALUE, notify_step, 'n', "notify", "After how many files it should send a life signal", NULL) \
     PGS_ARG(PGS_ARG_VALUE, min_size, 's', "min-size", "Will ignore every file under this limit", NULL) \
+    PGS_ARG(PGS_ARG_VALUE, top, 't', "top", "largest duplicate groups", NULL) \
     PGS_ARG(PGS_ARG_VALUE, exclude, 'E', "exclude", "Exclude files, comma separated list", NULL) \
     PGS_ARG(PGS_ARG_FLAG, summary, 'S', "summary", "Create Summary", NULL)
 

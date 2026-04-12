@@ -345,6 +345,21 @@ bool PGS__FN(_parse)(PGS__ARGS_T *args, int argc, char** argv, bool ignore_on_er
     return true;
 }
 
+static void print_valid_values_pretty(const char *s) {
+    if (!s) return;
+
+    char *dup = strdup(s);
+    printf("      Valid values:\n");
+    char* token = strtok(dup, "|");
+
+    while (token != NULL) {
+        printf("        - %s\n", token);
+        token = strtok(NULL, "|");
+    }
+
+    free(dup);
+}
+
 void PGS__FN(_print_help)(void) {
     printf("Available arguments:\n\n");
 
@@ -367,7 +382,8 @@ void PGS__FN(_print_help)(void) {
         printf("\n      %s\n", meta->description);
 
         if (meta->valid_values) {
-            printf("      Valid values: %s\n", meta->valid_values);
+            print_valid_values_pretty(meta->valid_values);
+            // printf("      Valid values: %s\n", meta->valid_values);
         }
 
         printf("\n");
