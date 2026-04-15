@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,9 @@
 #include <unistd.h>
 #include "third_party/stb_ds.h"
 #include "utils/formatter.h"
+
+#define XXH_INLINE_ALL
+#include "third_party/xxhash.h"
 
 #undef PGS_ARGS
 #define PGS_ARGS \
@@ -38,6 +42,8 @@
 
 #define STB_DS_IMPLEMENTATION
 #include "third_party/stb_ds.h"
+
+#define HEAD_SIZE 65536
 
 dupe_args_t dupe_args;
 
@@ -64,16 +70,31 @@ static uint64_t hash_file_head(const char *path) {
     close(fd);
     if (n <= 0) return 0;
 
-    uint64_t out = 0;
-    blake2b(buf, (size_t)n, &out, sizeof(out));
-    return out;
+    return XXH3_64bits(buf, (size_t)n);
+    // uint64_t out = 0;
+    // blake2b(buf, (size_t)n, &out, sizeof(out));
+    // return out;
 }
 
 static uint64_t hash_file_full(const char *path) {
-    uint64_t out = 0;
-    if (!blake2b_file(path, &out, sizeof(out)))
-        return 0;
-    return out;
+    XXH3_state_t state;
+    // XXH3_state_t *state = XXH3_createState();
+    // if (!state) return 0;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+
+    XXH3_64bits_reset(&state);
+
+    uint8_t buf[131072];
+    ssize_t n;
+
+    while ((n = read(fd, buf, sizeof(buf))) > 0)
+        XXH3_64bits_update(&state, buf, n);
+
+    close(fd);
+
+    return XXH3_64bits_digest(&state);;
 }
 
 static bool should_execute(const char *path, char **patterns) {
@@ -204,8 +225,10 @@ bool cmd_dupe(int argc, char **argv) {
     }
     printf("    scan done: %d files\n", data.file_count);
 
+    int max_size_groups = hmlen(data.size_map);
     int candidates = 0;
-    for (int i = 0; i < hmlen(data.size_map); i++) {
+
+    for (int i = 0; i < max_size_groups; i++) {
         int len = arrlen(data.size_map[i].value);
         if (len >= 2)
             candidates += arrlen(data.size_map[i].value);
@@ -213,20 +236,54 @@ bool cmd_dupe(int argc, char **argv) {
 
     printf("    %d candidate files to hash\n", candidates);
 
+    int candidates_left = candidates;
+
+    FileHashEntry *hash_map = NULL;
+    hmdefault(hash_map, NULL);
+    hmreserve(hash_map, candidates);
+
+    int hashed = 0;
+    int small_files = 0;
+    int large_files = 0;
+
+
 
     FileHashEntry *head_map = NULL;
-    int hashed = 0;
-    for (int i = 0; i < hmlen(data.size_map); ++i) {
+    hmdefault(head_map, NULL);
+    hmreserve(head_map, candidates);
+
+    for (int i = 0; i < max_size_groups; ++i) {
         char **paths = data.size_map[i].value;
         int len = arrlen(paths);
         if (len < 2) continue;
 
+        uint64_t file_size = data.size_map[i].key;
+
+        if (file_size <= HEAD_SIZE) {
+            small_files += len;
+            candidates_left -= len;
+
+            for (int j = 0; j < len; ++j) {
+                FileHashEntry *entry = stbds_hmgetp_null(head_map, 0);
+                if (!entry) {
+                    char **paths1 = NULL;
+                    arrput(paths1, paths[j]);
+                    hmput(head_map, 0, paths1);
+                } else {
+                    arrput(entry->value, paths[j]);
+                }
+            }
+            continue;
+        }
+
+
+        large_files += len;
         for (int j = 0; j < len; ++j) {
             uint64_t hash = hash_file_head(data.size_map[i].value[j]);
             hashed += 1;
 
             if (data.notify_step > 0 && hashed % data.notify_step == 0)
-                fprintf(stderr, "    head hashing... %d/%d\r", hashed, candidates);
+                fprintf(stderr, "    head hashing... %d/%d\r", hashed, candidates_left);
 
             FileHashEntry *entry = stbds_hmgetp_null(head_map, hash);
             if (!entry) {
@@ -234,25 +291,27 @@ bool cmd_dupe(int argc, char **argv) {
                 arrput(paths1, paths[j]);
                 hmput(head_map, hash, paths1);
             } else {
-                arrput(entry->value, strdup(data.size_map[i].value[j]));
+                arrput(entry->value, paths[j]);
             }
+
         }
     }
-    fprintf(stderr, "\n    head hash done                    \n");
+    fprintf(stderr, "\n    head hash done (%d small, %d large)\n", small_files, large_files);
 
-
+    int max_head_groups = hmlen(head_map);
     int survivors = 0;
-    for (int i = 0; i < hmlen(head_map); ++i) {
+
+    for (int i = 0; i < max_head_groups; ++i) {
         int len = arrlen(head_map[i].value);
         if (len >= 2)
             survivors += len;
     }
 
-    printf("    %d files are still alive and need to be fully hashed\n", survivors);
+    printf("    %d files need full hashing\n", survivors);
 
-    FileHashEntry *hash_map = NULL;
     hashed = 0;
-    for (int i = 0; i < hmlen(head_map); ++i) {
+
+    for (int i = 0; i < max_head_groups; ++i) {
         char **paths = head_map[i].value;
         int len = arrlen(paths);
         if (len < 2) continue;
@@ -274,38 +333,43 @@ bool cmd_dupe(int argc, char **argv) {
             }
         }
     }
+
     fprintf(stderr, "\n   full hash done\n");
 
-    // hmfree(head_map);
-
+    hmfree(head_map);
     timer_end(&data.timer);
 
 
     int groups = 0;
     int dupe_files = 0;
     uint64_t wasted = 0;
-    uint64_t max_group_size = 0;
     int max_group_member = 0;
+    uint64_t max_group_size = 0;
+    int max_group_members = 0;
+    uint64_t max_members_size = 0;
+
     for (int i = 0; i < hmlen(hash_map); i++) {
         char **paths = hash_map[i].value;
-        struct STAT info;
-        get_file_info(paths[0], &info);
         int len = arrlen(paths);
         if (len < 2) continue;
+
+        struct STAT info;
+        get_file_info(paths[0], &info);
+
         groups += 1;
         dupe_files += len;
         size_t size = get_filesize(info, true);
         wasted += size * (len - 1);
 
+        if (len > max_group_members) {
+            max_group_members = len;
+            max_members_size = size;
+        }
+
         if (size > max_group_size) {
             max_group_size = size;
             max_group_member = len;
         }
-        // printf("\nduplicates: [");
-        // print_human_size(, false);
-        // printf("]\n");
-        // for (int j = 0; j < arrlen(paths); j++)
-        //     printf("    %s\n", paths[j]);
     }
 
     if (dupe_args.summary_present) {
@@ -315,17 +379,22 @@ bool cmd_dupe(int argc, char **argv) {
         printf("| Duplicate files: %d\n", dupe_files);
         printf("| Wasted: ");
         print_human_size(wasted, false);
-        printf("\n| Largest Group: %d files (", max_group_member);
+        printf("\n| Largest Group By Size: %d files (", max_group_member);
         print_human_size(max_group_size, false);
+        printf(" per member)\n");
+        printf("| Largest Group By Members: %d files (", max_group_members);
+        print_human_size(max_members_size, false);
         printf(" per member)\n");
         printf("\n\n\n");
     }
 
 
     printf("Time taken : %ld ms\n", timer_ms(data.timer));
+    printf("             %lu  sec\n", timer_ms(data.timer) / 1000);
+    printf("             %0.1f  min\n", (double)timer_ms(data.timer) / 1000 / 60);
 
-    // hmfree(hash_map);
-    // hmfree(data.size_map);
+    hmfree(hash_map);
+    hmfree(data.size_map);
 
     return true;
 }

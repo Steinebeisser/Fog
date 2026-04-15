@@ -1,6 +1,9 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -ggdb -g -O0
+CC = gcc # x86_64-w64-mingw32-gcc
+CFLAGS = -Wall -Wextra -ggdb -g -O0 -fno-omit-frame-pointer
+LDFLAGS = -luring
 INCLUDES = -Isrc -I.
+
+PREFIX ?= /usr/local
 
 
 rwildcard=$(foreach d,$(wildcard $(1:=/*)),$(call rwildcard,$d,$2) $(filter $(subst *,%,$2),$d))
@@ -29,7 +32,7 @@ TARGET = fog$(EXE)
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	@$(CC) $(CFLAGS) $(INCLUDES) $^ -o $@
+	@$(CC) $(CFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS)
 
 build/%.o: src/%.c
 	@mkdir -p $(@D)
@@ -41,6 +44,15 @@ clean:
 run: $(TARGET)
 	./$(TARGET) $(ARGS)
 
+
+install: $(TARGET)
+	@mkdir -p $(DESTDIR)$(PREFIX)/bin
+	@install -m 755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+	@echo "Installed $(TARGET) to $(DESTDIR)$(PREFIX)/bin/"
+
+uninstall:
+	@rm -f $(DESTDIR)$(PREFIX)/bin/$(TARGET)
+	@echo "Uninstalled $(TARGET)"
 
 
 .PHONY: all clean FORCE

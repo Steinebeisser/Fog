@@ -430,6 +430,7 @@ CREDITS
 #define hmfree      stbds_hmfree
 #define hmdefault   stbds_hmdefault
 #define hmdefaults  stbds_hmdefaults
+#define hmreserve   stbds_hmreserve
 
 #define shput       stbds_shput
 #define shputi      stbds_shputi
@@ -592,6 +593,9 @@ extern void * stbds_shmode_func(size_t elemsize, int mode);
 #define stbds_hmdefaults(t, s) \
     ((t) = stbds_hmput_default_wrapper((t), sizeof *(t)), (t)[-1] = (s))
 
+#define stbds_hmreserve(t, n) \
+    ((t) = stbds_hmput_reserve_wrapper((t), sizeof*(t), (n)))
+
 #define stbds_hmfree(p)        \
     ((void) ((p) != NULL ? stbds_hmfree_func((p)-1,sizeof*(p)),0 : 0),(p)=NULL)
 
@@ -716,6 +720,7 @@ template<class T> static T * stbds_shmode_func_wrapper(T *, size_t elemsize, int
 #define stbds_hmget_key_wrapper           stbds_hmget_key
 #define stbds_hmget_key_ts_wrapper        stbds_hmget_key_ts
 #define stbds_hmput_default_wrapper       stbds_hmput_default
+#define stbds_hmput_reserve_wrapper       stdbs_hmput_reserve
 #define stbds_hmput_key_wrapper           stbds_hmput_key
 #define stbds_hmdel_key_wrapper           stbds_hmdel_key
 #define stbds_shmode_func_wrapper(t,e,m)  stbds_shmode_func(e,m)
@@ -1331,6 +1336,30 @@ void * stbds_hmput_default(void *a, size_t elemsize)
   }
   return a;
 }
+
+void * stdbs_hmput_reserve(void *a, size_t elemsize, size_t n)
+{
+  // three cases:
+  //   a is NULL <- allocate
+  //   a has a hash table but no entries, because of shmode <- grow
+  //   a has entries <- do nothing
+  if (a == NULL || stbds_header(STBDS_HASH_TO_ARR(a,elemsize))->length == 0) {
+    size_t min_cap = (n == 0 ? 1 : n + 1);
+    a = stbds_arrgrowf(a ? STBDS_HASH_TO_ARR(a,elemsize) : NULL, elemsize, 0, min_cap);
+    stbds_header(a)->length += 1;
+    memset(a, 0, elemsize);
+    a=STBDS_ARR_TO_HASH(a,elemsize);
+  }
+  return a;
+}
+  // else {
+  //   // Already initialized → just make sure capacity is big enough
+  //   size_t min_cap = (n == 0 ? 1 : n + 1);
+  //   void *raw = STBDS_HASH_TO_ARR(a, elemsize);
+  //   raw = stbds_arrgrowf(raw, elemsize, 0, min_cap);
+  //   a = STBDS_ARR_TO_HASH(raw, elemsize);   // update pointer in case realloc moved it
+  // }
+  // return a;
 
 static char *stbds_strdup(char *str);
 

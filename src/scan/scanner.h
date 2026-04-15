@@ -12,6 +12,8 @@ typedef struct {
     void (*on_file)(int dirfd, const char *name, const char *full_path,
                     struct STAT *info, void *userdata);
     bool (*on_dir)(const char *full_path, void *userdata);
+    bool ignore_file_size;
+    bool ignore_full_path;
     void *userdata;
 } ScanOptions;
 

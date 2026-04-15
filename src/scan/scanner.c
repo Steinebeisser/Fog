@@ -1,3 +1,4 @@
+#include <stddef.h>
 #define _GNU_SOURCE
 
 #include "scanner.h"
@@ -13,10 +14,7 @@
 #   define GETDENTS64_CACHE_SIZE 131072
 #endif
 
-static bool is_excluded_dir(const char *name, bool no_exclude, bool no_mnt) {
-    if (no_exclude)
-        return false;
-
+static bool is_excluded_dir(const char *name, bool no_mnt) {
     switch (name[0]) {
         case 'p': return name[1] == 'r' && name[2] == 'o' && name[3] == 'c' && name[4] == '\0'; // proc
         case 's': return name[1] == 'y' && name[2] == 's' && name[3] == '\0';                   // sys
@@ -42,19 +40,19 @@ struct linux_dirent64 {
 };
 
 
-bool scan_directory(const char *path, const ScanOptions *opts) {
+bool scan_directory_fd(int dirfd, const char *path, const ScanOptions *opts) {
     char buf[GETDENTS64_CACHE_SIZE];
-    int fd = open(path, O_RDONLY | O_DIRECTORY);
     int nread;
-    while ((nread = syscall(SYS_getdents64, fd, buf, sizeof(buf))) > 0)
-    {
+    const char *current_path = path;
+
+    while ((nread = syscall(SYS_getdents64, dirfd, buf, sizeof(buf))) > 0) {
         int offset = 0;
         while (offset < nread) {
             struct linux_dirent64 *entry = (struct linux_dirent64 *)(buf + offset);
             offset += entry->d_reclen;
 
             if (entry->d_name[0] == '.') {
-                if (entry->d_name[1] == '\0' || 
+                if (entry->d_name[1] == '\0' ||
                     (entry->d_name[1] == '.' && entry->d_name[2] == '\0')) {
                     continue;
                 }
@@ -63,52 +61,75 @@ bool scan_directory(const char *path, const ScanOptions *opts) {
                     continue;
             }
 
-            if (entry->d_type == DT_DIR && !opts->no_exclude && is_excluded_dir(entry->d_name, opts->no_exclude, opts->skip_mnt))
+            if (entry->d_type == DT_DIR && !opts->no_exclude && is_excluded_dir(entry->d_name, opts->skip_mnt))
                 continue;
 
-            char full_path[PATH_MAX];
-            size_t len = strlen(path);
-            memcpy(full_path, path, len);
+            const char *path_to_use = NULL;
+            if (!opts->ignore_full_path) {
+                char full_path[PATH_MAX];
+                size_t len = strlen(current_path);
+                memcpy(full_path, path, len);
+                full_path[len++] = '/';
+                size_t name_len = entry->d_reclen - (offsetof(struct linux_dirent64, d_name)) - 1;
+                memcpy(full_path + len, entry->d_name, name_len);
+                len += name_len;
+                full_path[len] = '\0';
+                path_to_use = full_path;
+            }
 
-            full_path[len++] = '/';
 
-            size_t name_len = strlen(entry->d_name);
-            memcpy(full_path + len, entry->d_name, name_len);
-            len += name_len;
-
-            full_path[len] = '\0';
 
             if (entry->d_type == DT_REG) {
                 if (opts->on_file) {
-                    struct STAT info;
-                    if (get_file_info_at(fd, entry->d_name, &info)) {
-                        opts->on_file(fd, entry->d_name, full_path, &info, opts->userdata);
+                    if (opts->ignore_file_size) {
+                        opts->on_file(dirfd, entry->d_name, path_to_use, NULL, opts->userdata);
+                    } else {
+                        struct STAT info;
+                        if (get_file_info_at(dirfd, entry->d_name, &info)) {
+                            opts->on_file(dirfd, entry->d_name, path_to_use, &info, opts->userdata);
+                        }
                     }
                 }
             } else if (entry->d_type == DT_DIR && opts->recursive) {
 
                 if (opts->on_dir)
-                    if (!opts->on_dir(full_path, opts->userdata))
+                    if (!opts->on_dir(path_to_use, opts->userdata))
                         continue;
-                scan_directory(full_path, opts);
+
+                if (opts->recursive) {
+                    int fd = openat(dirfd, entry->d_name, O_RDONLY | O_DIRECTORY);
+                    if (fd < 0) continue;
+
+                    scan_directory_fd(fd, path_to_use, opts);
+                    close(fd);
+                }
             } else if (entry->d_type == DT_UNKNOWN) {
                 struct STAT info;
-                if (!get_file_info_at(fd, entry->d_name, &info))
+                if (!get_file_info_at(dirfd, entry->d_name, &info))
                     continue;
 
                 if (is_directory(info) && opts->recursive) {
-                    if (opts->on_dir) opts->on_dir(full_path, opts->userdata);
-                    scan_directory(full_path, opts);
+                    if (opts->on_dir) opts->on_dir(path_to_use, opts->userdata);
+                    scan_directory_fd(dirfd, path_to_use, opts);
                 } else if (is_file(info)) {
                     if (opts->on_file)
-                        opts->on_file(fd, entry->d_name, full_path, &info, opts->userdata);
+                        opts->on_file(dirfd, entry->d_name, path_to_use, &info, opts->userdata);
                 }
             }
         }
     }
-
-    close(fd);
     return true;
+}
+
+
+bool scan_directory(const char *path, const ScanOptions *opts) {
+    int root_fd = open(path, O_RDONLY | O_DIRECTORY);
+    if (root_fd < 0)
+        return false;
+
+    bool ret = scan_directory_fd(root_fd, path, opts);
+    close(root_fd);
+    return ret;
 }
 
 bool scan_path(const char *path, const ScanOptions *opts) {
