@@ -1,6 +1,6 @@
 #include "dupes_cmd.h"
 #include "scan/scanner.h"
-#include "utils/hashes/blake2b.h"
+#include "utils/arena.h"
 #include "utils/file_helper.h"
 #include <fnmatch.h>
 #include "utils/fog_timer.h"
@@ -15,6 +15,8 @@
 #include <unistd.h>
 #include "third_party/stb_ds.h"
 #include "utils/formatter.h"
+
+#define PATHS_ENTRY_CAP 64
 
 #define XXH_INLINE_ALL
 #include "third_party/xxhash.h"
@@ -151,10 +153,11 @@ static void on_file(int dirfd, const char *name, const char *full_path,
     FileHashEntry *entry = stbds_hmgetp_null(data->size_map, file_size);
     if (!entry) {
         char **paths = NULL;
-        arrput(paths, strdup(full_path));
+        arrsetcap(paths, PATHS_ENTRY_CAP);
+        arrput(paths, (char*)full_path);
         hmput(data->size_map, file_size, paths);
     } else {
-        arrput(entry->value, strdup(full_path));
+        arrput(entry->value, (char*)full_path);
     }
 }
 
@@ -208,6 +211,8 @@ bool cmd_dupe(int argc, char **argv) {
         }
     }
 
+    Arena paths = {0};
+
     ScanOptions opts = {
         .userdata = &data,
         .skip_hidden = !dupe_args.include_hidden_present,
@@ -215,7 +220,8 @@ bool cmd_dupe(int argc, char **argv) {
         .on_dir = on_dir,
         .on_file = on_file,
         .recursive = dupe_args.recursive_present,
-        .no_exclude = dupe_args.noexluce_present
+        .no_exclude = dupe_args.noexluce_present,
+        .path_arena = &paths
     };
 
     timer_start(&data.timer);
@@ -224,6 +230,7 @@ bool cmd_dupe(int argc, char **argv) {
         return false;
     }
     printf("    scan done: %d files\n", data.file_count);
+    printf("  used %zu bytes in arena\n", opts.path_arena->pos);
 
     int max_size_groups = hmlen(data.size_map);
     int candidates = 0;
@@ -267,6 +274,7 @@ bool cmd_dupe(int argc, char **argv) {
                 FileHashEntry *entry = stbds_hmgetp_null(head_map, 0);
                 if (!entry) {
                     char **paths1 = NULL;
+                    arrsetcap(paths1, PATHS_ENTRY_CAP);
                     arrput(paths1, paths[j]);
                     hmput(head_map, 0, paths1);
                 } else {
@@ -288,6 +296,7 @@ bool cmd_dupe(int argc, char **argv) {
             FileHashEntry *entry = stbds_hmgetp_null(head_map, hash);
             if (!entry) {
                 char **paths1 = NULL;
+                arrsetcap(paths1, PATHS_ENTRY_CAP);
                 arrput(paths1, paths[j]);
                 hmput(head_map, hash, paths1);
             } else {
@@ -326,6 +335,7 @@ bool cmd_dupe(int argc, char **argv) {
             FileHashEntry *entry = hmgetp_null(hash_map, h);
             if (!entry) {
                 char **ps = NULL;
+                arrsetcap(ps, PATHS_ENTRY_CAP);
                 arrput(ps, paths[j]);
                 hmput(hash_map, h, ps);
             } else {

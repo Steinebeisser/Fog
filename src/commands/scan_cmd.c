@@ -26,6 +26,7 @@
     PGS_ARG(PGS_ARG_FLAG, ignore_file_size, IGNORE_FS_SHORT_FLAG, IGNORE_FS_LONG_FLAG, "Ignores File Size, improves speed but doesnt show total size", NULL) \
     PGS_ARG(PGS_ARG_FLAG, apparent, 'a', "apparent", "Show the logiacl size", NULL) \
     PGS_ARG(PGS_ARG_FLAG, count_stats, 'c', "count_stats", "Counts how many files are hidden, specifici size groups etc", NULL) \
+    PGS_ARG(PGS_ARG_VALUE, size, 's', "size", "Only counts file for the specific size", NULL)
 
 
 #define PGS_ARGS_FUNC_PREFIX scan_args
@@ -51,6 +52,8 @@ typedef struct {
     bool scan_stats;
     int hidden_count;
     int empty_files;
+    uint64_t file_size;
+    uint64_t file_count_size;
 
     int below_4kib;
     int below_16kib;
@@ -82,12 +85,15 @@ void print_stats(CmdScanData stats, const char *scan_path, bool decimal)
     printf("Total files     : %'d\n", stats.file_count);
 
     if (stats.scan_stats) {
-        if (stats.hidden_count) {
+        if (stats.file_size > 0) {
+            print_human_size(stats.file_size, decimal);
+            printf("        : %zu Files", stats.file_count_size);
+        } else if (stats.hidden_count) {
             double hidden_pct = (double)stats.hidden_count * 100.0 / stats.file_count;
             printf("Hidden files    : %'d (%.2f%%)\n", stats.hidden_count, hidden_pct);
         }
 
-        if (stats.total_size > 0) {
+        if (stats.total_size > 0 && !stats.file_size) {
             printf("\nSize distribution:\n");
 
             struct {
@@ -167,6 +173,13 @@ static void on_file(int dirfd, const char *name, const char *full_path,
             d->hidden_count += 1;
         if (info) {
             uint64_t size = info->st_size;
+            if (d->file_size > 0) {
+                if (size == d->file_size)
+                    d->file_count_size += 1;
+                return;
+            }
+
+
             if (size == 0) {
                 d->empty_files++;
                 d->size_empty += 0;
@@ -238,6 +251,13 @@ bool cmd_scan(int argc, char **argv) {
 
     data.scan_stats = scan_args.count_stats_present;
 
+    data.file_size = scan_args.size_present
+        ? pgs_args_parse_size(scan_args.size_value)
+        : 0;
+
+    if (data.file_size > 0)
+        data.scan_stats = true;
+
     ScanOptions opts = {
         .userdata = &data,
         .skip_hidden = !scan_args.include_hidden_present,
@@ -247,7 +267,7 @@ bool cmd_scan(int argc, char **argv) {
         .recursive = scan_args.recursive_present,
         .no_exclude = scan_args.noexluce_present,
         .ignore_file_size = scan_args.ignore_file_size_present,
-        .ignore_full_path = true
+        .path_arena = NULL
     };
 
     timer_start(&data.timer);

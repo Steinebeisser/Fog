@@ -1,9 +1,10 @@
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 #include "commands/dupes_cmd.h"
 #include "commands/hash_cmd.h"
 #include "commands/scan_cmd.h"
+#include "utils/output.h"
+#include "utils/panic.h"
 
 #define PGS_LOG_IMPLEMENTATION
 #ifndef PGS_LOG_ENABLED
@@ -31,7 +32,7 @@ int main(int argc, char **argv) {
         return false;
     }
 
-
+    setup_in_and_output();
 
     if (args.scan_present) {
         return !cmd_scan(argc - 1, argv + 1);
@@ -39,16 +40,16 @@ int main(int argc, char **argv) {
         return !cmd_dupe(argc - 1, argv + 1);
     } else if (args.hash_present) {
         return !cmd_hash(argc - 1, argv + 1);
-    }
-
-
-    if (args.help_present) {
+    } else if (args.help_present) {
         if (args.help_value) {
             pgs_args_print_help_specific_name(args.help_value);
         } else {
             pgs_args_print_help();
         }
         return true;
+    } else {
+        fprintf(stderr, "Invalid Argument, see -h/--help for more information\n");
+        return 1;
     }
 
     // pgs_log_minimal_log_level = PGS_LOG_DEBUG;

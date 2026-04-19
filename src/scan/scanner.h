@@ -2,6 +2,7 @@
 #define FOG_SCANNER_H
 
 #include <stdbool.h>
+#include "utils/arena.h"
 #include "utils/file_helper.h"
 
 typedef struct {
@@ -13,7 +14,8 @@ typedef struct {
                     struct STAT *info, void *userdata);
     bool (*on_dir)(const char *full_path, void *userdata);
     bool ignore_file_size;
-    bool ignore_full_path;
+    // if you wanna use the full path, pass a [0] initialized path_arena as an argument
+    Arena *path_arena;
     void *userdata;
 } ScanOptions;
 
