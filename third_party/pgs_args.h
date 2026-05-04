@@ -55,6 +55,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
+#include <errno.h>
 
 #ifndef PGS_ARGS_FUNC_PREFIX
 #   define PGS_ARGS_FUNC_PREFIX pgs_args
@@ -148,6 +150,26 @@ static uint64_t pgs_args_parse_size(const char *str) {
     else if (!strcasecmp(end, "tb") || !strcasecmp(end, "t")) val *= TB;
 
     return (uint64_t)val;
+}
+
+static uint64_t pgs_args_parse_count(const char *str) {
+    if (!str || !*str)
+        return 0;
+
+    while (isspace((unsigned char)*str))
+        str++;
+
+    errno = 0;
+    char *end = NULL;
+    unsigned long long n = strtoull(str, &end, 10);
+
+    if (errno == ERANGE)
+        return 0;
+
+    if (end == str || !end || *end != '\0')
+        return 0;
+
+    return n;
 }
 
 static PGS__ID PGS__FN(_find_by_short)(char flag) {

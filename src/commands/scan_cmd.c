@@ -1,7 +1,12 @@
 #include "scan_cmd.h"
+#include "utils/arena.h"
 #include "utils/formatter.h"
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <strings.h>
+#include <time.h>
 
 #ifdef __linux__
 #include <sys/statvfs.h>
@@ -26,7 +31,9 @@
     PGS_ARG(PGS_ARG_FLAG, ignore_file_size, IGNORE_FS_SHORT_FLAG, IGNORE_FS_LONG_FLAG, "Ignores File Size, improves speed but doesnt show total size", NULL) \
     PGS_ARG(PGS_ARG_FLAG, apparent, 'a', "apparent", "Show the logiacl size", NULL) \
     PGS_ARG(PGS_ARG_FLAG, count_stats, 'c', "count_stats", "Counts how many files are hidden, specifici size groups etc", NULL) \
-    PGS_ARG(PGS_ARG_VALUE, size, 's', "size", "Only counts file for the specific size", NULL)
+    PGS_ARG(PGS_ARG_VALUE, size, 's', "size", "Only counts file for the specific size", NULL) \
+    PGS_ARG(PGS_ARG_VALUE, largest, 'l', "largest", "Print N largest files after scan", NULL) \
+    PGS_ARG(PGS_ARG_FLAG, raw, 'R', "raw", "print raw bytes", NULL)
 
 
 #define PGS_ARGS_FUNC_PREFIX scan_args
@@ -42,6 +49,11 @@
 #include "utils/fog_timer.h"
 
 scan_args_t scan_args;
+
+typedef struct {
+    uint64_t size;
+    const char *path;
+} BigFileEntry;
 
 typedef struct {
     int file_count;
@@ -71,11 +83,27 @@ typedef struct {
     uint64_t size_below_16mib;
     uint64_t size_below_1gib;
     uint64_t size_above_1gib;
+
+    BigFileEntry *largest_files;
+    size_t largest_count;
+    size_t largest_limit;
+
+    bool raw_size;
 } CmdScanData;
 
 #define PCT(part, total) \
     ((total) > 0 ? (double)(part) * 100.0 / (double)(total) : 0.0)
 
+
+static void print_size(uint64_t bytes, bool decimal, bool raw)
+{
+    if (raw) {
+        printf("%'" PRIu64 " B", bytes);
+        return;
+    }
+
+    print_human_size(bytes, decimal);
+}
 
 void print_stats(CmdScanData stats, const char *scan_path, bool decimal)
 {
@@ -86,7 +114,7 @@ void print_stats(CmdScanData stats, const char *scan_path, bool decimal)
 
     if (stats.scan_stats) {
         if (stats.file_size > 0) {
-            print_human_size(stats.file_size, decimal);
+            print_size(stats.file_size, decimal, stats.raw_size);
             printf("        : %zu Files", stats.file_count_size);
         } else if (stats.hidden_count) {
             double hidden_pct = (double)stats.hidden_count * 100.0 / stats.file_count;
@@ -119,8 +147,23 @@ void print_stats(CmdScanData stats, const char *scan_path, bool decimal)
                        rows[i].count,
                        file_pct);
 
-                print_human_size(rows[i].size, decimal);
+                print_size(rows[i].size, decimal, stats.raw_size);
                 printf(" (%5.2f%%)\n", size_pct);
+            }
+        }
+
+        if (stats.largest_count > 0) {
+            printf("\n%zu Largest Files (", stats.largest_count);
+            size_t total_size = 0;
+            for (size_t i = 0; i < stats.largest_count; ++i) {
+                total_size += stats.largest_files[i].size;
+            }
+            print_size(total_size, decimal, stats.raw_size);
+            printf("):\n");
+            for (size_t i = 0; i < stats.largest_count; ++i) {
+                printf("  %zu. ", i + 1);
+                print_size(stats.largest_files[i].size, decimal, stats.raw_size);
+                printf("  %s\n", stats.largest_files[i].path);
             }
         }
     }
@@ -129,7 +172,7 @@ void print_stats(CmdScanData stats, const char *scan_path, bool decimal)
     printf("Dir Count       : %'d\n", stats.dir_count);
 
     printf("Total Size      : ");
-    print_human_size(stats.total_size, decimal);
+    print_size(stats.total_size, decimal, stats.raw_size);
     if (scan_args.ignore_file_size_present) {
         printf(" (ignored via ignore fs flag [-%c | --%s])",
                IGNORE_FS_SHORT_FLAG, IGNORE_FS_LONG_FLAG);
@@ -141,7 +184,7 @@ void print_stats(CmdScanData stats, const char *scan_path, bool decimal)
     if (statvfs(scan_path, &vfs) == 0) {
         uint64_t total_capacity = (uint64_t)vfs.f_blocks * vfs.f_frsize;
         printf("Disk Size       : ");
-        print_human_size(total_capacity, decimal);
+        print_size(total_capacity, decimal, stats.raw_size);
         printf("\n");
     } else {
         perror("Warning: Could not get filesystem size");
@@ -154,6 +197,58 @@ void print_stats(CmdScanData stats, const char *scan_path, bool decimal)
     printf("Time taken      : %'lu ms\n", timer_ms(stats.timer));
 }
 
+static void track_largest_files(CmdScanData *d, size_t file_size, const char *full_path) {
+    if (!d || !d->largest_files || d->largest_limit == 0 || !full_path) return;
+
+    int index = -1;
+    for (size_t i = 0; i < d->largest_count; ++i) {
+        if (file_size > d->largest_files[i].size) {
+            index = i;
+            break;
+        }
+    }
+
+    if (index < 0) {
+        if (d->largest_count < d->largest_limit) {
+            d->largest_files[d->largest_count].size = file_size;
+            d->largest_files[d->largest_count].path = full_path;
+            d->largest_count += 1;
+        }
+        return;
+    }
+
+    size_t temp_size = 0;
+    const char *temp_path = NULL;
+
+    size_t new_size = file_size;
+    const char *new_path = full_path;
+
+    size_t max = d->largest_count < d->largest_limit
+        ? d->largest_count + 1
+        : d->largest_limit;
+
+    for (size_t i = index; i < max; ++i) {
+        if (i == d->largest_count) {
+            d->largest_files[i].size = new_size;
+            d->largest_files[i].path = new_path;
+            break;
+        }
+
+        temp_size = d->largest_files[i].size;
+        temp_path = d->largest_files[i].path;
+
+        d->largest_files[i].size = new_size;
+        d->largest_files[i].path = new_path;
+
+        new_size = temp_size;
+        new_path = temp_path;
+    }
+
+    if (d->largest_count < d->largest_limit) {
+        d->largest_count += 1;
+    }
+}
+
 static void on_file(int dirfd, const char *name, const char *full_path,
                     struct STAT *info, void *userdata) {
     (void)dirfd;
@@ -164,8 +259,11 @@ static void on_file(int dirfd, const char *name, const char *full_path,
     if (d->notify_step > 0 && d->file_count % d->notify_step == 0)
         fprintf(stderr, "  scanning... %d files found\r", d->file_count);
 
-    if (info)
-        d->total_size += get_filesize(*info, scan_args.apparent_present);
+    if (info) {
+        size_t fs = get_filesize(*info, scan_args.apparent_present);
+        d->total_size += fs;
+        track_largest_files(d, fs, full_path);
+    }
 
 
     if (d->scan_stats) {
@@ -245,6 +343,8 @@ bool cmd_scan(int argc, char **argv) {
 
     CmdScanData data = {0};
 
+    data.raw_size = scan_args.raw_present;
+
     data.notify_step = scan_args.notify_step_present
         ? atoi(scan_args.notify_step_value)
         : 0;
@@ -258,6 +358,24 @@ bool cmd_scan(int argc, char **argv) {
     if (data.file_size > 0)
         data.scan_stats = true;
 
+
+    Arena arena = {0};
+    bool use_arena = false;
+
+    if (scan_args.largest_present) {
+        use_arena = true;
+
+        size_t n = pgs_args_parse_count(scan_args.largest_value);
+        data.largest_limit = n;
+        data.largest_files = calloc(data.largest_limit, sizeof(*data.largest_files));
+        data.scan_stats = true;
+
+        if (!data.largest_files) {
+            perror("calloc");
+            return false;
+        }
+    }
+
     ScanOptions opts = {
         .userdata = &data,
         .skip_hidden = !scan_args.include_hidden_present,
@@ -267,7 +385,7 @@ bool cmd_scan(int argc, char **argv) {
         .recursive = scan_args.recursive_present,
         .no_exclude = scan_args.noexluce_present,
         .ignore_file_size = scan_args.ignore_file_size_present,
-        .path_arena = NULL
+        .path_arena = use_arena ? &arena : NULL
     };
 
     timer_start(&data.timer);
